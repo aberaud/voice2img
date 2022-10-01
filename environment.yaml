@@ -1,0 +1,15 @@
+name: voice2img
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - ldm
+  - pip=20.3
+  - cudatoolkit=11.3
+  - pytorch=1.11.0
+  - torchvision=0.12.0
+  - numpy=1.19.2
+  - pip:
+    - albumentations==0.4.3
+    - omegaconf==2.1.1
+    - -e .
