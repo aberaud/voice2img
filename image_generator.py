@@ -14,32 +14,22 @@ from PIL import Image
 import numpy as np
 import io
 
-def load_model_from_config(opt, config, verbose=False):
-    print(f"Loading txt2img model from {opt.ckpt}")
+def load_model_from_config(opt, config):
+    print(f"Loading Stable Diffusion model from {opt.ckpt}")
     pl_sd = torch.load(opt.ckpt, map_location="cpu")
-    if "global_step" in pl_sd:
-        print(f"Global Step: {pl_sd['global_step']}")
     sd = pl_sd["state_dict"]
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
+    model = instantiate_from_config(config)
+    model.load_state_dict(sd, strict=False)
     model.cuda()
     model.eval()
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     return model.to(device)
 
 class ImageGenerator:
-    start_code = None
-
     def init(self, opt):
         self.opt = opt
         self.config = OmegaConf.load(f"{opt.config}")
-        self.model = load_model_from_config(opt, self.config)
+        self.model = load_model_from_config(opt, self.config.model)
         self.precision_scope = autocast if opt.precision=="autocast" else nullcontext
         if opt.plms:
             self.sampler = PLMSSampler(self.model)
@@ -47,9 +37,12 @@ class ImageGenerator:
             self.sampler = DDIMSampler(self.model)
         if opt.fixed_code:
             self.start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=self.model.device)
+        else:
+            self.start_code = None
 
-    def generate_images(self, prompt):
-        print(f'Starting {self.opt.ddim_steps} steps generation for: "{prompt}"')
+    def generate_images(self, input: dict):
+        prompt = input['text']
+        print(f'Starting {self.opt.ddim_steps} steps Stable Diffusion for: "{prompt}"')
         data = [self.opt.n_samples * [prompt]]
         result = []
 
@@ -57,8 +50,8 @@ class ImageGenerator:
             with self.precision_scope("cuda"):
                 with self.model.ema_scope():
                     tic = time.time()
-                    for n in trange(self.opt.n_iter, desc="Sampling"):
-                        for prompts in tqdm(data, desc="data"):
+                    for n in range(self.opt.n_iter):
+                        for prompts in data:
                             uc = None
                             if self.opt.scale != 1.0:
                                 uc = self.model.get_learned_conditioning(self.opt.n_samples * [""])
@@ -86,5 +79,5 @@ class ImageGenerator:
                                 result.append(b.getvalue())
 
                     toc = time.time()
-                    print(f'Done in {toc-tic}')
-        return result
+                    print(f'Stable Diffusion done in {toc-tic} s')
+        return input, result

@@ -7,16 +7,19 @@ import asyncio
 import concurrent.futures
 import aiohttp
 from aiohttp import web
+import uuid
 
 from image_generator import ImageGenerator
 from speech_recognizer import SpeechRecognizer
 from audio_input import record_audio_blocks
 
-model_executor = concurrent.futures.ProcessPoolExecutor(1)
+speech_executor = concurrent.futures.ThreadPoolExecutor(1)
+imggen_executor = concurrent.futures.ThreadPoolExecutor(1)
 
 BUF_SIZE = 8*SpeechRecognizer.SAMPLE_RATE
 SLIDE = BUF_SIZE//4
 
+queue = asyncio.Queue()
 image_generator = ImageGenerator()
 speech_recognizer = SpeechRecognizer()
 connected_clients: set[web.WebSocketResponse] = set()
@@ -24,8 +27,10 @@ cached_result = None
 
 
 def load_model(opt):
-    seed_everything(opt.seed)
     image_generator.init(opt)
+
+
+def load_speech(opt):
     speech_recognizer.init()
 
 
@@ -41,29 +46,42 @@ async def index(request):
     return web.FileResponse('./index.html')
 
 
-async def send_to_client(socket: web.WebSocketResponse, lang, text, images):
-    await socket.send_json({'lang': lang, 'text': text})
-    for img in images:
-        await socket.send_bytes(img)
+async def send_to_client(socket: web.WebSocketResponse, input, images=()):
+    try:
+        await socket.send_json(input)
+        for img in images:
+            await socket.send_bytes(img)
+    except Exception as e:
+        print(f'Error sending to client: {e}')
 
 
-async def process_audio():
-    global cached_result
+async def audio_to_text():
     print('Starting audio recording...')
     async for audio_frame in record_audio_blocks(block_size=BUF_SIZE, slide=SLIDE, samplerate=SpeechRecognizer.SAMPLE_RATE):
-        lang, result = await asyncio.get_running_loop().run_in_executor(model_executor, recognize_speech, audio_frame)
+        lang, result = await asyncio.get_running_loop().run_in_executor(speech_executor, recognize_speech, audio_frame)
         if result:
-            # print(f'{lang}: {result}')
-            images = await asyncio.get_running_loop().run_in_executor(model_executor, generate_images, result)
-            # Cache latest result for new connections
-            cached_result = lang, result, images
-            await asyncio.gather(*[send_to_client(ws, lang, result, images) for ws in connected_clients])
+            data = {'id': str(uuid.uuid4()), 'lang': lang, 'text': result}
+            await asyncio.gather(
+                queue.put(asyncio.get_running_loop().run_in_executor(imggen_executor, generate_images, data)),
+                *[send_to_client(ws, data) for ws in connected_clients]
+            )
 
 
-async def websocket_handler(request):
+async def text_to_image():
+    global cached_result
+    while True:
+        task = await queue.get()
+        result, images = await task
+        result['n'] = len(images) if images else 0
+        cached_result = result, images
+        await asyncio.gather(*[send_to_client(ws, result, images) for ws in connected_clients])
+        queue.task_done()
+
+
+async def websocket_handler(request: web.Request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    print('Websocket connection opened')
+    print(f'WebSocket connection with {request.remote} ({" ".join(request.headers["User-Agent"].split()[-2:])}) opened')
 
     # Send initial cached data
     if cached_result:
@@ -75,10 +93,9 @@ async def websocket_handler(request):
             if msg.data == 'close':
                 await ws.close()
         elif msg.type == aiohttp.WSMsgType.ERROR:
-            print('ws connection closed with exception %s' %
-                  ws.exception())
+            print(f'WebSocket connection with {request.remote} closed with exception {ws.exception()}')
     connected_clients.remove(ws)
-    print('Websocket connection closed')
+    print(f'WebSocket connection with {request.remote} closed')
     return ws
 
 
@@ -185,19 +202,22 @@ async def main():
         default="autocast"
     )
     opt = parser.parse_args()
+    seed_everything(opt.seed)
 
     app = web.Application()
     app.add_routes([web.get('/', index)])
     app.add_routes([web.get('/ws', websocket_handler)])
 
     loop = asyncio.get_running_loop()
-    # Load models in separate process
-    await loop.run_in_executor(model_executor, load_model, opt)
+    # Load models in their executor
+    await loop.run_in_executor(imggen_executor, load_model, opt)
+    await loop.run_in_executor(speech_executor, load_speech, opt)
 
     # Start processing
     await asyncio.gather(
-        loop.create_task(process_audio()),
-        loop.create_task(web._run_app(app))
+        audio_to_text(),
+        text_to_image(),
+        web._run_app(app)
     )
 
 if __name__ == "__main__":

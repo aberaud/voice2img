@@ -24,8 +24,8 @@ async def record_audio_blocks(block_size, slide, samplerate, **kwargs):
     async for indata, status in inputstream_generator(samplerate=samplerate, **kwargs):
         if status:
             print(status)
-        audio_buf = np.concatenate((audio_buf, indata[:,0]))
+        audio_buf: np.ndarray = np.concatenate((audio_buf, indata.flatten()))
         if len(audio_buf) > block_size:
-            copy = audio_buf[-block_size:]
+            copy: np.ndarray = audio_buf[-block_size:]
             audio_buf = audio_buf[-slide:]
             yield copy

@@ -1,61 +1,86 @@
-
 <!DOCTYPE html>
 <html>
-    <head>
-        <meta charset="utf-8" />
-	    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-	    <title>AI output viewer</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-iYQeCzEYFbKjA/T2uDLTpkwGzCiq6soy8tYaI1GyVh/UjpbCx/TYkiZhlZB6+fzT" crossorigin="anonymous">
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-u1OknCvxWvY5kfmNBILK2hRnQC3Pr17a+RTT6rIHI7NnikvbZlHgTPOOmMi466C8" crossorigin="anonymous"></script>
-        <script>
-const createObjectURL = (object) => (window.URL) ? window.URL.createObjectURL(object) : window.webkitURL.createObjectURL(object)
-
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI output viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-iYQeCzEYFbKjA/T2uDLTpkwGzCiq6soy8tYaI1GyVh/UjpbCx/TYkiZhlZB6+fzT" crossorigin="anonymous">
+    <script>
+const languageNames = new Intl.DisplayNames(navigator.languages, { type: 'language' })
+const resultCard = (result, image) =>
+    `<div class="card mb-3">
+        <img id="${result.id}" src="${image}" class="card-img-top" />
+        <div class="card-body">
+            <h5 class="card-title">${result.text}</h5>
+            <p class="card-text">${languageNames.of(result.lang)}</p>
+        </div>
+    </div>`
+const addResult = (container, result) => {
+    const card = document.createElement('div')
+    card.classList.add('col-sm-4')
+    card.innerHTML = resultCard(result, result.images ? result.images[0] : '')
+    container.insertBefore(card, container.firstChild)
+    card.animate([{ opacity: 0, transform: 'scale(.8)', width: '80px' }, {}],
+        { duration: 400, easing: 'ease-out' })
+    return card
+}
 const new_websocket = (dispatch) => {
-  const ws = new WebSocket(`ws://${window.location.hostname}:${window.location.port}/ws`)
-  ws.binaryType = "blob"
-  ws.onclose = () => {
-    console.log('ws close')
-  }
-  ws.onerror = (e) => {
-    console.log('ws error')
-    console.log(e)
-  }
-  ws.onopen = () => {
-    console.log('ws open')
-  }
-  const textMsg = document.getElementById('main-title')
-  const img = document.getElementById('main-img')
-
-  ws.onmessage = (m) => {
-    try {
-        if (typeof m.data == "string") {
-            const data = JSON.parse(m.data)
-            textMsg.textContent = data.text;
-        } else {
-            const reader = new FileReader()
-            reader.onload = e => img.src = e.target.result;
-            reader.readAsDataURL(m.data)
+    const container = document.getElementById('main-content')
+    const textMsg = document.getElementById('main-title')
+    const loadingCards = {}
+    let cache = {}
+    const ws = new WebSocket(`ws://${window.location.hostname}:${window.location.port}/ws`)
+    ws.binaryType = "blob"
+    ws.onopen = () => textMsg.textContent = 'Say something...'
+    ws.onclose = () => textMsg.textContent = 'Disconnected...'
+    ws.onerror = (e) => console.log(e)
+    ws.onmessage = (m) => {
+        try {
+            if (typeof m.data == "string") {
+                const data = JSON.parse(m.data)
+                if ('n' in data) { // Images are following
+                    cache = data
+                    cache.images = []
+                } else {
+                    loadingCards[data.id] = addResult(container, data)
+                }
+            } else {
+                const reader = new FileReader()
+                reader.onload = e => {
+                    if (cache.images.push(e.target.result) == cache.n) {
+                        const card = loadingCards[cache.id]
+                        if (card) {
+                            delete loadingCards[cache.id]
+                            const img = document.getElementById(cache.id)
+                            img.src = cache.images[0]
+                            img.animate([{ width: 0 }, {}], { duration: 400, easing: 'ease-out' })
+                        } else {
+                            addResult(container, cache)
+                        }
+                        cache = {}
+                    }
+                }
+                reader.readAsDataURL(m.data)
+            }
+        } catch (e) {
+            console.log(`Failed to handle websocket message`)
         }
     }
-    catch (e) {
-      console.log(`Failed to deserialise websocket message`)
-    }
-  }
-  return ws
+    return ws
 }
-        </script>
-    </head>
-	<body>
-		<header>
-			<div id="searchbar" class="elw"><div id="sbc" class="container">
-				<h1 id="main-title">Say something...</h1>
-			</div></div>
-		</header>
-		<div id="main-content" class="container">
-			<img id="main-img" />
-		</div>
-        <script>
+    </script>
+</head>
+<body style="background-color:#eee">
+    <header>
+        <div id="searchbar" class="container">
+            <h1 id="main-title">Connecting...</h1>
+        </div>
+    </header>
+    <div class="container">
+        <div id="main-content" class="row"></div>
+    </div>
+    <script>
 const ws = new_websocket()
-        </script>
-    </body>
+    </script>
+</body>
 </html>
