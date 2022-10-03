@@ -8,7 +8,6 @@ from ldm.models.diffusion.plms import PLMSSampler
 import torch
 from torch import autocast
 from contextlib import contextmanager, nullcontext
-from tqdm import tqdm, trange
 from einops import rearrange
 from PIL import Image
 import numpy as np
@@ -49,7 +48,6 @@ class ImageGenerator:
         with torch.no_grad():
             with self.precision_scope("cuda"):
                 with self.model.ema_scope():
-                    tic = time.time()
                     for n in range(self.opt.n_iter):
                         for prompts in data:
                             uc = None
@@ -78,6 +76,4 @@ class ImageGenerator:
                                 Image.fromarray(x_sample.astype(np.uint8)).save(b, "jpeg")
                                 result.append(b.getvalue())
 
-                    toc = time.time()
-                    print(f'Stable Diffusion done in {toc-tic} s')
         return input, result

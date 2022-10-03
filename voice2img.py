@@ -62,7 +62,7 @@ async def audio_to_text():
         if result:
             data = {'id': str(uuid.uuid4()), 'lang': lang, 'text': result}
             await asyncio.gather(
-                queue.put(asyncio.get_running_loop().run_in_executor(imggen_executor, generate_images, data)),
+                queue.put(data),
                 *[send_to_client(ws, data) for ws in connected_clients]
             )
 
@@ -71,7 +71,7 @@ async def text_to_image():
     global cached_result
     while True:
         task = await queue.get()
-        result, images = await task
+        result, images = await asyncio.get_running_loop().run_in_executor(imggen_executor, generate_images, task)
         result['n'] = len(images) if images else 0
         cached_result = result, images
         await asyncio.gather(*[send_to_client(ws, result, images) for ws in connected_clients])
